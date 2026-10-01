@@ -34,6 +34,25 @@ from . import data_service
 from .data_service import REP_IDS
 
 MODEL_NAME = "gpt-4o-mini"
+SAFE_PROSPECT_FIELDS = (
+    "name",
+    "email",
+    "annual_revenue",
+    "disqualified",
+    "enrichment_source",
+)
+
+
+def _sanitize_prospect_profile(profile):
+    "Return a prospect profile containing only safe and enrichment fields."
+    sanitized = {
+        "prospect_id": profile["prospect_id"],
+        **{key: profile[key] for key in SAFE_PROSPECT_FIELDS if key in profile},
+    }
+    for key in ("engagement_history", "account_details", "tech_stack"):
+        if key in profile:
+            sanitized[key] = profile[key]
+    return sanitized
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -52,13 +71,16 @@ def build_prospect_profile(prospect_id: str) -> dict:
     "Assemble a full prospect profile (engagement history, account details, tech stack) and store it. Returns the profile and a found flag."
     existing = data_service.get_profile_from_db(prospect_id)["prospect_profile"]
     if existing is not None:
-        return {"prospect_profile": existing, "found": True}
+        sanitized = _sanitize_prospect_profile(existing)
+        if sanitized != existing:
+            data_service.save_profile_to_db(prospect_id, sanitized)
+        return {"prospect_profile": sanitized, "found": True}
     rec = data_service.get_prospect_record(prospect_id)
     if rec is None:
         return {"prospect_profile": None, "found": False}
     built = {
         "prospect_id": prospect_id,
-        **rec,
+        **{key: rec[key] for key in SAFE_PROSPECT_FIELDS if key in rec},
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
@@ -128,12 +150,9 @@ def get_prospect(prospect_id: str) -> dict:
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
     contact = {
         "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        **{key: record[key] for key in SAFE_PROSPECT_FIELDS if key in record},
     }
     return {"prospect": contact, "found": True}
 
